@@ -8,7 +8,8 @@ st.title("📈 V20 — Operator Activity Scanner")
 st.write(
     "Finds stocks with a run of **consecutive green candles (no red candle) totaling a 20%+ move** — "
     "the signature of operator/strong-hand accumulation — then flags it only once price has "
-    "**pulled back into that zone** without breaking below it. Buy-on-pullback, not buy-on-breakout."
+    "**pulled back into that zone** without breaking below it, **and is currently trading below its "
+    "200-day moving average**. Buy-on-pullback, not buy-on-breakout."
 )
 st.caption("Reference examples from Vivek sir's notes: KAYNES, TRENT, JPPOWER, RAJESHEXPO")
 
@@ -137,10 +138,20 @@ if st.button("Run V20 Scan"):
         progress.progress(n_done / len(tickers), text=f"Scanning {symbol}...")
         try:
             stock = yf.Ticker(symbol)
-            df = stock.history(period="2y")
-            if df.empty or len(df) < 30:
+            df_full = stock.history(period="2y")
+            if df_full.empty or len(df_full) < 210:
                 continue
-            df = df.iloc[-lookback_days:].reset_index()
+
+            df_full["SMA200"] = df_full["Close"].rolling(window=200).mean()
+            dma200 = df_full["SMA200"].iloc[-1]
+            current_price_check = df_full["Close"].iloc[-1]
+            if pd.isna(dma200):
+                continue
+            # Core V20 filter: only interested in stocks currently below their 200 DMA
+            if current_price_check >= dma200:
+                continue
+
+            df = df_full.iloc[-lookback_days:].reset_index()
 
             current_price = df['Close'].iloc[-1]
             runs = find_green_runs(df)
@@ -184,6 +195,8 @@ if st.button("Run V20 Scan"):
             results.append({
                 "Symbol": symbol,
                 "Current Price": f"₹{current_price:.2f}",
+                "200 DMA": f"₹{dma200:.2f}",
+                "Below DMA By": f"{((dma200 - current_price) / dma200 * 100):.1f}%",
                 "Zone Low": round(zone_low, 2),
                 "Zone High": round(zone_high, 2),
                 "Zone Gain": f"{best_zone['zone_gain']:.1f}%",

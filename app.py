@@ -63,6 +63,7 @@ V200 = [
     "GRINDWELL.NS","BSOFT.NS","LOTUSDEV.NS","AIAENG.NS","TATATECH.NS","ELECON.NS","SUPREMEIND.NS",
     "EIHOTEL.NS","CLEAN.NS","NIITMTS.NS","SUNPHARMA.NS","AHLUCONT.NS","GPIL.NS","KIRLOSBROS.NS",
     "DABUR.NS","KEI.NS",
+    "BAJFINANCE.NS","MUTHOOTFIN.NS","SHRIRAMFIN.NS","CHOLAFIN.NS","SBICARD.NS","SUNDARMFIN.NS","FIVESTAR.NS",
 ]
 
 def dedupe(tickers):
@@ -77,11 +78,63 @@ V40 = dedupe(V40)
 V40_NEXT = dedupe(V40_NEXT)
 V200 = dedupe(V200)
 
-option = st.selectbox("Select Stock Universe to Scan:", ["V40", "V40 Next", "V200", "Custom Tickers"])
+# ---------------- V50 (stricter V200 filter) ----------------
+FINANCIALS_V50 = {
+    "BAJFINANCE.NS", "MUTHOOTFIN.NS", "SHRIRAMFIN.NS", "CHOLAFIN.NS",
+    "SBICARD.NS", "SUNDARMFIN.NS", "FIVESTAR.NS"
+}
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def compute_v50_universe(v200_list, financials_set):
+    """Applies Vivek sir's stricter V50 filters on top of V200 (per V50of_v200 notes):
+    non-financials need Debt/Equity<0.2, Net Profit>Rs.250cr, ROCE>25%, YoY qtr profit growth>0,
+    price<0.75xATH. Financials (banks/NBFC) need ROE>15%, Net Profit>Rs.1500cr, price<0.75xATH.
+    PSU/government companies are excluded per the V200 criteria doc unless manually overridden.
+    NOTE: yfinance doesn't expose a true ROCE figure — this uses returnOnAssets as an imperfect
+    proxy, so any pass here still needs a Screener.in cross-check before you act on it, same as
+    the highest-ever-profit checks elsewhere in this app."""
+    passed = []
+    for symbol in v200_list:
+        try:
+            stock = yf.Ticker(symbol)
+            hist = stock.history(period="max")
+            if hist.empty:
+                continue
+            ath = hist['High'].max()
+            current_price = hist['Close'].iloc[-1]
+            if ath <= 0 or current_price >= 0.75 * ath:
+                continue
+
+            info = stock.info
+            net_income = info.get("netIncomeToCommon")
+            if net_income is None:
+                continue
+
+            if symbol in financials_set:
+                roe = info.get("returnOnEquity")
+                if roe is not None and roe * 100 > 15 and net_income > 1500 * 1e7:
+                    passed.append(symbol)
+            else:
+                debt_to_equity = info.get("debtToEquity")
+                roce_proxy = info.get("returnOnAssets")
+                if debt_to_equity is None or roce_proxy is None:
+                    continue
+                de_ratio = debt_to_equity / 100 if debt_to_equity > 5 else debt_to_equity
+                if de_ratio < 0.2 and net_income > 250 * 1e7 and roce_proxy * 100 > 25:
+                    passed.append(symbol)
+        except Exception:
+            continue
+    return passed
+
+option = st.selectbox("Select Stock Universe to Scan:", ["V40", "V40 Next", "V50", "V200", "Custom Tickers"])
 if option == "V40":
     tickers = V40
 elif option == "V40 Next":
     tickers = V40_NEXT
+elif option == "V50":
+    with st.spinner("Applying V50 filters to the V200 universe... this checks fundamentals for every stock, so it can take a minute."):
+        tickers = compute_v50_universe(V200, FINANCIALS_V50)
+    st.caption(f"V50 found {len(tickers)} stock(s) passing the stricter filter. Cross-check on Screener.in before acting — see note above.")
 elif option == "V200":
     tickers = V200
 else:
